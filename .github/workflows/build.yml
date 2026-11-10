@@ -1,0 +1,116 @@
+name: CI
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+    paths-ignore:
+      - '**/*.md'
+  pull_request:
+  workflow_dispatch:
+
+env:
+  JAVA_VERSION: 21
+  JAVA_DISTRO: temurin
+  NODE_VERSION: 22
+  # the micro-wakeword4j branch or tag to build against while pom.xml names a snapshot of it
+  MICRO_WAKEWORD4J_REF: main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Maven Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Setup Java
+        uses: actions/setup-java@v6.1.0
+        with:
+          distribution: ${{ env.JAVA_DISTRO }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+      # runs the tests of the WebAssembly build
+      - name: Setup Node.js
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Read the micro-wakeword4j version
+        run: echo "MICRO_WAKEWORD4J_VERSION=$(./mvnw -B -q help:evaluate -Dexpression=micro-wakeword4j.version -DforceStdout)" >> "$GITHUB_ENV"
+      # snapshots are not on Maven Central, so a snapshot is built from the micro-wakeword4j repository
+      - name: Checkout micro-wakeword4j
+        if: endsWith(env.MICRO_WAKEWORD4J_VERSION, '-SNAPSHOT')
+        uses: actions/checkout@v7
+        with:
+          repository: jvoice-project/micro-wakeword4j
+          ref: ${{ env.MICRO_WAKEWORD4J_REF }}
+          path: micro-wakeword4j
+      # builds against the version just installed, not an older one from the Maven cache
+      - name: Install micro-wakeword4j
+        if: endsWith(env.MICRO_WAKEWORD4J_VERSION, '-SNAPSHOT')
+        working-directory: micro-wakeword4j
+        run: |
+          ./mvnw -B install -DskipTests -Dmaven.source.skip=true -Dmaven.javadoc.skip=true
+          echo "MICRO_WAKEWORD4J_VERSION=$(./mvnw -B -q help:evaluate -Dexpression=project.version -DforceStdout)" >> "$GITHUB_ENV"
+      - name: Build with Maven
+        run: ./mvnw -B package -DskipTests -Dmicro-wakeword4j.version=${{ env.MICRO_WAKEWORD4J_VERSION }}
+      - name: Test
+        run: ./mvnw -B verify -Dmicro-wakeword4j.version=${{ env.MICRO_WAKEWORD4J_VERSION }}
+
+  publish:
+    name: Publish to npm
+    if: github.repository == 'jvoice-project/micro-wakeword4j-wasm' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      # for the GitHub release
+      contents: write
+      # for npm trusted publishing, which signs in with the workflow's identity instead of a token
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Setup Java
+        uses: actions/setup-java@v6.1.0
+        with:
+          distribution: ${{ env.JAVA_DISTRO }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+      - name: Setup Node.js
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: https://registry.npmjs.org
+      # trusted publishing needs npm 11.5.1 or later
+      - name: Update npm
+        run: npm install -g npm@^11.5.1
+      # a release names a micro-wakeword4j release, which comes from Maven Central
+      - name: Build with Maven
+        id: build
+        run: |
+          ./mvnw -B package -DskipTests
+          echo "VERSION=$(./mvnw -B -q help:evaluate -Dexpression=project.version -DforceStdout)" >> "$GITHUB_OUTPUT"
+      # skips a version that is already published, such as the first one, which is published by hand (see PUBLISH.md)
+      - name: Publish to npm
+        run: |
+          PACKAGE=$(node -p "const p = require('./target/dist/package.json'); p.name + '@' + p.version")
+          if [ -z "$(npm view "$PACKAGE" version 2>/dev/null)" ]; then
+            npm publish ./target/dist --access public
+          fi
+          npm pack ./target/dist --pack-destination target
+      - name: Release
+        uses: softprops/action-gh-release@v3
+        with:
+          name: microWakeWord for browsers v${{ steps.build.outputs.VERSION }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: >-
+            [micro-wakeword4j](https://github.com/jvoice-project/micro-wakeword4j) compiled to WebAssembly, for wake word detection in web pages.
+          files: |
+            target/jvoice-project-micro-wakeword4j-${{ steps.build.outputs.VERSION }}.tgz
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

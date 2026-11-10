@@ -1,0 +1,22 @@
+{
+  "name": "@jvoice-project/micro-wakeword4j",
+  "version": "${project.version}",
+  "description": "microWakeWord wake word detection in browsers, micro-wakeword4j compiled to WebAssembly",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/jvoice-project/micro-wakeword4j-wasm",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jvoice-project/micro-wakeword4j-wasm.git"
+  },
+  "type": "module",
+  "main": "./micro-wakeword.js",
+  "types": "./micro-wakeword.d.ts",
+  "exports": {
+    ".": {
+      "types": "./micro-wakeword.d.ts",
+      "default": "./micro-wakeword.js"
+    },
+    "./micro-wakeword.wasm": "./micro-wakeword.wasm"
+  },
+  "sideEffects": false
+}
